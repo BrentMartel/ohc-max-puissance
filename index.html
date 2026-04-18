@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#050d18" />
+<title>OHC Max Puissance · Tournament Dashboard</title>
+<meta name="description" content="Live standings and schedule for OHC Max Puissance in the 2012 D3 Contact division." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Oswald:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #020509; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; -webkit-font-smoothing: antialiased; }
+  #root { min-height: 100vh; }
+  .loading-screen {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; color: #94b8d6; font-family: 'Oswald', sans-serif;
+    letter-spacing: 0.15em; font-size: 12px; text-transform: uppercase;
+  }
+  .loading-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #ef4444; margin-right: 10px;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+  }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="loading-screen">
+    <span class="loading-dot"></span>
+    Loading tournament data
+  </div>
+</div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+const SCHEDULE_ID = '11sEDdz4JWg7VlMuLyMWP7hfJXzsjHkscNjvYRJOR-Mo';
+const STANDINGS_ID = '1g4u13-1nB3M1cInWDzsuJ1kV2FOZj27XwiEYA-D0haI';
+const DIVISION_LABEL = '2012 D3 Contact';
+const LEVEL_TAG = '2012 D3';
+const OHC_ALIASES = ['ohc', 'max puissance'];
+const REFRESH_MS = 5 * 60 * 1000;
+
+const sheetUrl = (id) => `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv`;
+
+async function fetchCsv(id) {
+  const res = await fetch(sheetUrl(id) + '&_=' + Date.now(), { cache: 'no-store' });
+  if (!res.ok) throw new Error('Fetch failed: ' + res.status);
+  const text = await res.text();
+  return Papa.parse(text, { skipEmptyLines: false }).data;
+}
+
+function isOHC(name) {
+  if (!name) return false;
+  const n = name.toString().toLowerCase();
+  return OHC_ALIASES.some(a => n.includes(a));
+}
+
+function parseNum(v) {
+  if (v === undefined || v === null) return 0;
+  const s = v.toString().trim();
+  if (!s) return 0;
+  const parsed = parseInt(s, 10);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+function parseStandings(rows) {
+  const startIdx = rows.findIndex(r => r && r[0] && r[0].toString().trim() === DIVISION_LABEL);
+  if (startIdx === -1) return [];
+
+  const teams = [];
+  for (let i = startIdx + 2; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const teamName = (row[0] || '').toString().trim();
+    if (!teamName) break;
+    teams.push({
+      team: teamName,
+      w: parseNum(row[1]),
+      sow: parseNum(row[2]),
+      sol: parseNum(row[3]),
+      l: parseNum(row[4]),
+      gf: parseNum(row[5]),
+      ga: parseNum(row[6]),
+      pts: parseNum(row[7]),
+    });
+  }
+
+  teams.forEach(t => {
+    t.gd = t.gf - t.ga;
+    t.gp = t.w + t.sow + t.sol + t.l;
+  });
+
+  teams.sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf);
+  return teams;
+}
+
+function parseSchedule(rows) {
+  const games = [];
+  let currentDay = '';
+
+  for (const row of rows || []) {
+    if (!row) continue;
+    const cellA = (row[0] || '').toString().trim();
+
+    if (cellA.match(/(April|Avril)/i) && cellA.match(/\d/)) {
+      currentDay = cellA.split('/')[0].trim();
+      continue;
+    }
+
+    const gameNum = parseInt(cellA, 10);
+    if (!gameNum || isNaN(gameNum)) continue;
+
+    const level = (row[2] || '').toString().trim();
+    if (level !== LEVEL_TAG) continue;
+
+    const away = (row[3] || '').toString().trim();
+    const home = (row[6] || '').toString().trim();
+    if (!isOHC(away) && !isOHC(home)) continue;
+
+    games.push({
+      gameNum,
+      day: currentDay,
+      time: (row[1] || '').toString().trim(),
+      away,
+      awayScore: (row[4] || '').toString().trim(),
+      home,
+      homeScore: (row[7] || '').toString().trim(),
+      arena: (row[8] || '').toString().trim(),
+      ohcIsHome: isOHC(home),
+    });
+  }
+
+  games.sort((a, b) => a.gameNum - b.gameNum);
+  return games;
+}
+
+function formatTimeAgo(date) {
+  if (!date) return '';
+  const sec = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (sec < 5) return 'just now';
+  if (sec < 60) return sec + 's ago';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm ago';
+  const hr = Math.floor(min / 60);
+  return hr + 'h ago';
+}
+
+function gameResultForOHC(game) {
+  if (!game.awayScore || !game.homeScore) return null;
+  const awayNum = parseNum(game.awayScore.replace(/\D.*$/, ''));
+  const homeNum = parseNum(game.homeScore.replace(/\D.*$/, ''));
+  const isSO = /so/i.test(game.awayScore + ' ' + game.homeScore);
+  const ohcScore = game.ohcIsHome ? homeNum : awayNum;
+  const oppScore = game.ohcIsHome ? awayNum : homeNum;
+  let result;
+  if (ohcScore > oppScore) result = isSO ? 'SOW' : 'W';
+  else if (ohcScore < oppScore) result = isSO ? 'SOL' : 'L';
+  else result = 'T';
+  return { ohcScore, oppScore, result };
+}
+
+function Dashboard() {
+  const [standings, setStandings] = useState([]);
+  const [games, setGames] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [error, setError] = useState(null);
+  const [, forceRender] = useState(0);
+  const intervalRef = useRef(null);
+
+  const loadData = useCallback(async (isInitial) => {
+    if (isInitial) setLoading(true); else setRefreshing(true);
+    try {
+      const [schedRows, standRows] = await Promise.all([
+        fetchCsv(SCHEDULE_ID),
+        fetchCsv(STANDINGS_ID),
+      ]);
+      setStandings(parseStandings(standRows));
+      setGames(parseSchedule(schedRows));
+      setLastUpdate(new Date());
+      setError(null);
+    } catch (e) {
+      console.error(e);
+      setError(e.message || 'Could not load data');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData(true);
+    intervalRef.current = setInterval(() => loadData(false), REFRESH_MS);
+    const tick = setInterval(() => forceRender(x => x + 1), 30000);
+    return () => {
+      clearInterval(intervalRef.current);
+      clearInterval(tick);
+    };
+  }, [loadData]);
+
+  if (loading) {
+    return (
+      <div className="loading-screen">
+        <span className="loading-dot"></span>
+        Loading tournament data
+      </div>
+    );
+  }
+
+  const ohcRow = standings.find(t => isOHC(t.team));
+  const ohcPosition = ohcRow ? standings.findIndex(t => isOHC(t.team)) + 1 : null;
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      background: 'radial-gradient(ellipse at top, #0a1929 0%, #050d18 50%, #020509 100%)',
+      color: '#e8f1f8',
+    }}>
+      <Styles />
+
+      <Header
+        onRefresh={() => loadData(false)}
+        refreshing={refreshing}
+        lastUpdate={lastUpdate}
+        error={error}
+      />
+
+      {ohcRow && <OHCSummary ohcRow={ohcRow} ohcPosition={ohcPosition} totalTeams={standings.length} />}
+
+      {games.length > 0 && <GamesSection games={games} />}
+
+      {standings.length > 0 && <StandingsSection standings={standings} />}
+
+      <Footer lastUpdate={lastUpdate} />
+    </div>
+  );
+}
+
+function Styles() {
+  return (
+    <style>{`
+      .display-font { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.02em; }
+      .heading-font { font-family: 'Oswald', sans-serif; }
+      .mono-font { font-family: 'JetBrains Mono', monospace; }
+
+      .stripe-bg {
+        background-image: repeating-linear-gradient(
+          135deg, transparent 0, transparent 8px,
+          rgba(239, 68, 68, 0.04) 8px, rgba(239, 68, 68, 0.04) 9px);
+      }
+
+      .ohc-row {
+        background: linear-gradient(90deg, rgba(239, 68, 68, 0.15) 0%, rgba(239, 68, 68, 0.05) 100%);
+        border-left: 3px solid #ef4444;
+      }
+
+      .glow-red { box-shadow: 0 0 40px rgba(239, 68, 68, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+
+      .ice-edge {
+        border: 1px solid rgba(148, 184, 214, 0.15);
+        background: linear-gradient(180deg, rgba(16, 30, 50, 0.6) 0%, rgba(8, 18, 32, 0.8) 100%);
+        backdrop-filter: blur(10px);
+      }
+
+      .pulse-dot { animation: pulseDot 2s ease-in-out infinite; }
+      @keyframes pulseDot {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.5; transform: scale(1.1); }
+      }
+
+      .spin { animation: spin 1s linear infinite; }
+      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+      .win-badge { background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3); }
+      .sow-badge { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3); }
+      .sol-badge { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3); }
+      .loss-badge { background: linear-gradient(135deg, #64748b 0%, #475569 100%); }
+      .tbd-badge { background: rgba(100, 116, 139, 0.3); color: #94b8d6; border: 1px dashed rgba(148, 184, 214, 0.3); }
+
+      .scoreboard {
+        background: linear-gradient(180deg, #0d1b2a 0%, #050d17 100%);
+        border: 1px solid rgba(148, 184, 214, 0.2);
+        position: relative; overflow: hidden;
+      }
+      .scoreboard::before {
+        content: ''; position: absolute; inset: 0;
+        background: radial-gradient(ellipse at top, rgba(239, 68, 68, 0.08), transparent 60%);
+        pointer-events: none;
+      }
+
+      table { width: 100%; border-collapse: collapse; }
+      th {
+        font-family: 'Oswald', sans-serif; text-transform: uppercase;
+        letter-spacing: 0.08em; font-size: 10px; color: #7891a8;
+        font-weight: 600; padding: 10px 6px; text-align: center;
+        border-bottom: 1px solid rgba(148, 184, 214, 0.15);
+      }
+      th:first-child, td:first-child { text-align: left; padding-left: 12px; }
+      td { padding: 12px 6px; font-size: 13px; border-bottom: 1px solid rgba(148, 184, 214, 0.06); text-align: center; }
+
+      .pos-badge {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 24px; height: 24px; border-radius: 6px;
+        font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 12px;
+      }
+      .pos-top3 { background: linear-gradient(135deg, #fbbf24 0%, #d97706 100%); color: #0a1929; }
+      .pos-top8 { background: rgba(59, 130, 246, 0.2); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.3); }
+      .pos-rest { background: rgba(148, 184, 214, 0.1); color: #7891a8; }
+      .pos-ohc { background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); color: white; box-shadow: 0 0 12px rgba(239, 68, 68, 0.5); }
+
+      .refresh-btn {
+        background: rgba(148, 184, 214, 0.08);
+        border: 1px solid rgba(148, 184, 214, 0.2);
+        color: #94b8d6; font-family: 'Oswald', sans-serif;
+        font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+        padding: 7px 12px; border-radius: 6px; cursor: pointer;
+        display: inline-flex; align-items: center; gap: 6px;
+        transition: all 0.2s ease;
+      }
+      .refresh-btn:hover { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: #fecaca; }
+      .refresh-btn:disabled { opacity: 0.6; cursor: wait; }
+    `}</style>
+  );
+}
+
+function Header({ onRefresh, refreshing, lastUpdate, error }) {
+  return (
+    <div className="stripe-bg" style={{
+      background: 'linear-gradient(180deg, rgba(239, 68, 68, 0.12) 0%, transparent 100%)',
+      borderBottom: '1px solid rgba(239, 68, 68, 0.2)',
+      padding: '28px 20px 24px',
+      position: 'relative',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span className="pulse-dot" style={{
+            width: '8px', height: '8px', borderRadius: '50%',
+            background: error ? '#f59e0b' : '#ef4444', display: 'inline-block',
+          }} />
+          <span className="heading-font" style={{
+            fontSize: '11px', letterSpacing: '0.2em', color: error ? '#f59e0b' : '#ef4444',
+            fontWeight: 600, textTransform: 'uppercase',
+          }}>
+            {error ? 'Cached Data' : 'Live · Weekend 3'}
+          </span>
+        </div>
+        <button className="refresh-btn" onClick={onRefresh} disabled={refreshing}>
+          <span className={refreshing ? 'spin' : ''} style={{ display: 'inline-block' }}>↻</span>
+          {refreshing ? 'Updating' : 'Refresh'}
+        </button>
+      </div>
+
+      <h1 className="display-font" style={{ fontSize: '42px', lineHeight: '0.95', margin: '0 0 6px', color: '#ffffff' }}>
+        OHC<br />
+        <span style={{ color: '#ef4444' }}>MAX PUISSANCE</span>
+      </h1>
+      <p className="heading-font" style={{ fontSize: '13px', color: '#94b8d6', margin: '0 0 8px', letterSpacing: '0.05em' }}>
+        2012 D3 Contact Division · April 17 to 19, 2026
+      </p>
+
+      <div className="heading-font" style={{ fontSize: '10.5px', color: '#7891a8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+        {error ? <span style={{ color: '#fbbf24' }}>Last sync failed. Showing last known data.</span>
+               : <>Synced {formatTimeAgo(lastUpdate)} · Auto-refreshes every 5 min</>}
+      </div>
+    </div>
+  );
+}
+
+function OHCSummary({ ohcRow, ohcPosition, totalTeams }) {
+  const suffix = ohcPosition === 1 ? 'st' : ohcPosition === 2 ? 'nd' : ohcPosition === 3 ? 'rd' : 'th';
+  const gd = ohcRow.gd;
+  return (
+    <div style={{ padding: '20px' }}>
+      <div className="scoreboard glow-red" style={{ borderRadius: '12px', padding: '22px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px' }}>
+          <div>
+            <div className="heading-font" style={{ fontSize: '10px', color: '#7891a8', letterSpacing: '0.15em', marginBottom: '2px', textTransform: 'uppercase' }}>Current Standing</div>
+            <div className="display-font" style={{ fontSize: '48px', lineHeight: '1', color: '#ffffff' }}>
+              {ohcPosition}<span style={{ fontSize: '22px', color: '#ef4444' }}>{suffix}</span>
+            </div>
+            <div className="heading-font" style={{ fontSize: '11px', color: '#94b8d6', letterSpacing: '0.05em', marginTop: '2px' }}>of {totalTeams} teams</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div className="heading-font" style={{ fontSize: '10px', color: '#7891a8', letterSpacing: '0.15em', marginBottom: '2px', textTransform: 'uppercase' }}>Points</div>
+            <div className="display-font" style={{ fontSize: '48px', lineHeight: '1', color: '#ef4444' }}>{ohcRow.pts}</div>
+          </div>
+        </div>
+
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px',
+          paddingTop: '16px', borderTop: '1px solid rgba(148, 184, 214, 0.12)',
+        }}>
+          <Stat label="Record" value={`${ohcRow.w}-${ohcRow.sow}-${ohcRow.l}`} accent="#10b981" />
+          <Stat label="GF" value={ohcRow.gf} accent="#ffffff" />
+          <Stat label="GA" value={ohcRow.ga} accent="#ffffff" />
+          <Stat label="Diff" value={(gd >= 0 ? '+' : '') + gd} accent={gd > 0 ? '#10b981' : gd < 0 ? '#f87171' : '#94b8d6'} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, accent }) {
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <div className="display-font" style={{ fontSize: '24px', color: accent, lineHeight: '1' }}>{value}</div>
+      <div className="heading-font" style={{ fontSize: '9px', color: '#7891a8', letterSpacing: '0.12em', marginTop: '4px', textTransform: 'uppercase' }}>{label}</div>
+    </div>
+  );
+}
+
+function SectionHeader({ title, subtitle }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+      borderBottom: '2px solid rgba(239, 68, 68, 0.3)', paddingBottom: '8px',
+    }}>
+      <h2 className="display-font" style={{ fontSize: '22px', margin: 0, color: '#ffffff', letterSpacing: '0.02em' }}>{title}</h2>
+      <span className="heading-font" style={{ fontSize: '10px', color: '#7891a8', letterSpacing: '0.15em', textTransform: 'uppercase' }}>{subtitle}</span>
+    </div>
+  );
+}
+
+function GamesSection({ games }) {
+  return (
+    <div style={{ padding: '0 20px 20px' }}>
+      <SectionHeader title="OHC Games" subtitle={`${games.length} total`} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '14px' }}>
+        {games.map((game, i) => <GameCard key={i} game={game} index={i} />)}
+      </div>
+    </div>
+  );
+}
+
+function GameCard({ game, index }) {
+  const scored = gameResultForOHC(game);
+  const isComplete = scored !== null;
+  const opponent = game.ohcIsHome ? game.away : game.home;
+
+  let badgeClass = 'tbd-badge';
+  let badgeText = 'Upcoming';
+  if (isComplete) {
+    if (scored.result === 'W') { badgeClass = 'win-badge'; badgeText = 'W'; }
+    else if (scored.result === 'SOW') { badgeClass = 'sow-badge'; badgeText = 'SO W'; }
+    else if (scored.result === 'SOL') { badgeClass = 'sol-badge'; badgeText = 'SO L'; }
+    else if (scored.result === 'T') { badgeClass = 'loss-badge'; badgeText = 'T'; }
+    else { badgeClass = 'loss-badge'; badgeText = 'L'; }
+  }
+
+  const ohcScoreColor = !isComplete ? '#475569'
+    : scored.result === 'W' || scored.result === 'SOW' ? '#34d399'
+    : scored.result === 'L' ? '#f87171' : '#ffffff';
+
+  return (
+    <div className="ice-edge" style={{ borderRadius: '10px', padding: '14px 16px', position: 'relative' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+        <div>
+          <div className="heading-font" style={{ fontSize: '10px', color: '#7891a8', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+            Game {index + 1} · {game.day || '-'}
+          </div>
+          <div style={{ fontSize: '11.5px', color: '#94b8d6', marginTop: '2px' }}>
+            {game.time}{game.arena ? ' · ' + game.arena : ''} · {game.ohcIsHome ? 'Home' : 'Away'}
+          </div>
+        </div>
+        <span className={`${badgeClass} heading-font`} style={{
+          padding: '4px 10px', borderRadius: '4px', fontSize: '11px',
+          fontWeight: 700, letterSpacing: '0.05em', color: 'white',
+        }}>{badgeText}</span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: '12px', alignItems: 'center' }}>
+        <div style={{ textAlign: 'left' }}>
+          <div className="heading-font" style={{ fontSize: '11px', color: '#ef4444', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600 }}>OHC</div>
+          <div className="display-font" style={{ fontSize: '36px', lineHeight: '1', color: ohcScoreColor }}>
+            {isComplete ? scored.ohcScore : '-'}
+          </div>
+        </div>
+        <div className="display-font" style={{ fontSize: '14px', color: '#475569', letterSpacing: '0.1em' }}>VS</div>
+        <div style={{ textAlign: 'right' }}>
+          <div className="heading-font" style={{ fontSize: '11px', color: '#94b8d6', letterSpacing: '0.05em', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {opponent.toUpperCase()}
+          </div>
+          <div className="display-font" style={{ fontSize: '36px', lineHeight: '1', color: '#ffffff' }}>
+            {isComplete ? scored.oppScore : '-'}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StandingsSection({ standings }) {
+  return (
+    <div style={{ padding: '0 20px 30px' }}>
+      <SectionHeader title="Division Standings" subtitle={DIVISION_LABEL} />
+      <div className="ice-edge" style={{ marginTop: '14px', borderRadius: '10px', overflow: 'hidden' }}>
+        <table>
+          <thead>
+            <tr>
+              <th style={{ width: '28px' }}>#</th>
+              <th>Team</th>
+              <th>GP</th>
+              <th>Pts</th>
+              <th>Diff</th>
+            </tr>
+          </thead>
+          <tbody>
+            {standings.map((t, i) => {
+              const isOHCTeam = isOHC(t.team);
+              const posClass = isOHCTeam ? 'pos-ohc' : i < 3 ? 'pos-top3' : i < 8 ? 'pos-top8' : 'pos-rest';
+              return (
+                <tr key={t.team} className={isOHCTeam ? 'ohc-row' : ''}>
+                  <td><span className={`pos-badge ${posClass}`}>{i + 1}</span></td>
+                  <td style={{ fontWeight: isOHCTeam ? 700 : 500, color: isOHCTeam ? '#ffffff' : '#cbd5e1', fontSize: '12.5px' }}>{t.team}</td>
+                  <td className="mono-font" style={{ color: '#94b8d6', fontSize: '12px' }}>{t.gp}</td>
+                  <td className="display-font" style={{ fontSize: '17px', color: isOHCTeam ? '#ef4444' : '#ffffff' }}>{t.pts}</td>
+                  <td className="mono-font" style={{ fontSize: '12px', fontWeight: 700, color: t.gd > 0 ? '#34d399' : t.gd < 0 ? '#f87171' : '#94b8d6' }}>
+                    {t.gd > 0 ? '+' : ''}{t.gd}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="heading-font" style={{
+        marginTop: '14px', display: 'flex', gap: '14px', flexWrap: 'wrap',
+        fontSize: '10.5px', color: '#7891a8', letterSpacing: '0.05em', textTransform: 'uppercase',
+      }}>
+        <LegendDot color="linear-gradient(135deg, #fbbf24, #d97706)" label="Top 3" />
+        <LegendDot color="rgba(59, 130, 246, 0.4)" label="Top 8" />
+        <LegendDot color="linear-gradient(135deg, #ef4444, #b91c1c)" label="OHC" />
+      </div>
+    </div>
+  );
+}
+
+function LegendDot({ color, label }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: color, display: 'inline-block' }} />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function Footer({ lastUpdate }) {
+  return (
+    <div style={{
+      padding: '16px 20px 30px', borderTop: '1px solid rgba(148, 184, 214, 0.08)',
+      fontSize: '11.5px', color: '#7891a8', lineHeight: '1.6',
+    }}>
+      <div style={{ marginBottom: '8px' }}>
+        <strong style={{ color: '#94b8d6' }}>Scoring:</strong> W = 3, SOW = 2, SOL = 1, L = 0.
+        &quot;Diff&quot; shows raw goal differential (GF minus GA); official standings cap per-game diff at 7.
+      </div>
+      <div style={{ fontSize: '10.5px', color: '#475569' }}>
+        Data pulled from tournament Google Sheets · Last sync {lastUpdate ? lastUpdate.toLocaleTimeString() : '-'}
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<Dashboard />);
+</script>
+</body>
+</html>
