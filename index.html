@@ -531,7 +531,7 @@ function TeamSummary({ teamRow, teamPosition, totalTeams, viewingOHC }) {
           display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px',
           paddingTop: '16px', borderTop: '1px solid rgba(148, 184, 214, 0.12)',
         }}>
-          <Stat label="Record" value={`${teamRow.w}-${teamRow.sow}-${teamRow.l}`} accent="#10b981" />
+          <Stat label="Record" value={`${teamRow.w}-${teamRow.sow}-${teamRow.sol}-${teamRow.l}`} accent="#10b981" />
           <Stat label="GF" value={teamRow.gf} accent="#ffffff" />
           <Stat label="GA" value={teamRow.ga} accent="#ffffff" />
           <Stat label="Diff" value={(gd >= 0 ? '+' : '') + gd} accent={gd > 0 ? '#10b981' : gd < 0 ? '#f87171' : '#94b8d6'} />
