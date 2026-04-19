@@ -171,6 +171,12 @@ function formatTimeAgo(date) {
   return hr + 'h ago';
 }
 
+function isSundayLabel(day) {
+  if (!day) return false;
+  const d = day.toLowerCase();
+  return d.includes('sunday') || d.includes('dimanche') || d.includes('19');
+}
+
 function teamMatches(name, target) {
   if (!name || !target) return false;
   return name.toString().trim().toLowerCase() === target.toString().trim().toLowerCase();
@@ -278,6 +284,15 @@ function Dashboard() {
       {teamGames.length > 0 && <GamesSection games={teamGames} team={selectedTeam} viewingOHC={viewingOHC} />}
 
       {standings.length > 0 && <StandingsSection standings={standings} selectedTeam={selectedTeam} onSelectTeam={setSelectedTeam} />}
+
+      {viewingOHC && standings.length > 0 && teamRow && (
+        <ScenariosSection
+          ohcRow={teamRow}
+          ohcPosition={teamPosition}
+          standings={standings}
+          allGames={games}
+        />
+      )}
 
       <Footer lastUpdate={lastUpdate} />
     </div>
@@ -632,6 +647,161 @@ function LegendDot({ color, label }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
       <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: color, display: 'inline-block' }} />
       <span>{label}</span>
+    </div>
+  );
+}
+
+function ScenariosSection({ ohcRow, ohcPosition, standings, allGames }) {
+  const sundayGames = allGames.filter(g => isSundayLabel(g.day));
+  const remainingOHCGames = allGames.filter(g => (isOHC(g.away) || isOHC(g.home)) && !(g.awayScore && g.homeScore));
+
+  // Teams adjacent in the standings
+  const adjacentTeams = standings.filter((t, i) => Math.abs(i - (ohcPosition - 1)) <= 2 && !isOHC(t.team));
+
+  // Seeding logic, 8-team and 4-team variants
+  const seed = ohcPosition;
+  const matchup4 = seed >= 1 && seed <= 4 ? standings[4 - seed] : null; // 1v4, 2v3
+  const matchup8 = seed >= 1 && seed <= 8 ? standings[9 - seed - 1] : null; // 1v8, 2v7, ...
+
+  const pointsBehindFirst = standings[0].pts - ohcRow.pts;
+
+  const ordinal = (n) => n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th';
+
+  return (
+    <div style={{ padding: '0 20px 24px' }}>
+      <SectionHeader title="What Tomorrow Looks Like" subtitle="Scenarios" />
+
+      <div className="ice-edge" style={{ borderRadius: '10px', padding: '16px', marginTop: '14px', marginBottom: '12px' }}>
+        <div className="heading-font" style={{ fontSize: '10px', color: '#ef4444', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: '8px' }}>
+          Where OHC Sits
+        </div>
+        <div style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: '1.6' }}>
+          OHC is <strong style={{ color: '#ffffff' }}>{ohcPosition}{ordinal(ohcPosition)}</strong> with <strong style={{ color: '#ef4444' }}>{ohcRow.pts} points</strong>
+          {pointsBehindFirst > 0 ? `, ${pointsBehindFirst} behind 1st (${standings[0].team})` : ', tied for 1st'}.
+          {' '}Goal differential is <strong style={{ color: ohcRow.gd >= 0 ? '#34d399' : '#f87171' }}>{ohcRow.gd >= 0 ? '+' : ''}{ohcRow.gd}</strong>, which is the tiebreaker if teams finish on the same points.
+        </div>
+      </div>
+
+      {remainingOHCGames.length > 0 && (
+        <div className="ice-edge" style={{ borderRadius: '10px', padding: '16px', marginBottom: '12px' }}>
+          <div className="heading-font" style={{ fontSize: '10px', color: '#fbbf24', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: '10px' }}>
+            Next Up for OHC
+          </div>
+          {remainingOHCGames.map((g, i) => {
+            const opp = isOHC(g.home) ? g.away : g.home;
+            return (
+              <div key={i} style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: '1.6', marginBottom: i < remainingOHCGames.length - 1 ? '8px' : 0 }}>
+                <strong style={{ color: '#ffffff' }}>{g.day} at {g.time}</strong> vs <strong style={{ color: '#ef4444' }}>{opp}</strong>
+                {g.arena ? ` at ${g.arena}` : ''}.
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {sundayGames.length > 0 && (
+        <div className="ice-edge" style={{ borderRadius: '10px', padding: '16px', marginBottom: '12px' }}>
+          <div className="heading-font" style={{ fontSize: '10px', color: '#93c5fd', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: '10px' }}>
+            Sunday Games in the Division
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {sundayGames.map((g, i) => {
+              const isOHCGame = isOHC(g.away) || isOHC(g.home);
+              const isComplete = !!(g.awayScore && g.homeScore);
+              return (
+                <div key={i} style={{
+                  fontSize: '12.5px',
+                  color: isOHCGame ? '#ffffff' : '#94b8d6',
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  background: isOHCGame ? 'rgba(239, 68, 68, 0.1)' : 'rgba(148, 184, 214, 0.04)',
+                  borderLeft: isOHCGame ? '2px solid #ef4444' : '2px solid transparent',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                    <span>
+                      <strong style={{ color: isOHCGame ? '#ef4444' : '#cbd5e1' }}>{g.time}</strong>
+                      {' · '}
+                      {g.away} vs {g.home}
+                    </span>
+                    {isComplete && (
+                      <span className="mono-font" style={{ fontSize: '11px', color: '#7891a8', whiteSpace: 'nowrap' }}>
+                        {g.awayScore}-{g.homeScore}
+                      </span>
+                    )}
+                  </div>
+                  {g.arena && <div style={{ fontSize: '10.5px', color: '#7891a8', marginTop: '2px' }}>{g.arena}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="ice-edge" style={{ borderRadius: '10px', padding: '16px', marginBottom: '12px' }}>
+        <div className="heading-font" style={{ fontSize: '10px', color: '#34d399', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: '10px' }}>
+          Likely Playoff Matchup
+        </div>
+        <div style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: '1.65' }}>
+          <p style={{ margin: '0 0 10px' }}>
+            Weekend tournaments of this size typically run a single-elimination bracket seeded by round-robin finish. Two common formats:
+          </p>
+
+          <div style={{ padding: '10px 12px', background: 'rgba(59, 130, 246, 0.08)', borderRadius: '6px', marginBottom: '8px' }}>
+            <div className="heading-font" style={{ fontSize: '10px', color: '#93c5fd', letterSpacing: '0.1em', marginBottom: '4px', textTransform: 'uppercase' }}>
+              If top 8 advance
+            </div>
+            <div style={{ fontSize: '12.5px', color: '#cbd5e1' }}>
+              Quarterfinals: 1v8, 2v7, 3v6, 4v5. At <strong style={{ color: '#ef4444' }}>{seed}{ordinal(seed)}</strong>, OHC would face{' '}
+              {matchup8 ? <strong style={{ color: '#ffffff' }}>{matchup8.team}</strong> : 'a top-8 opponent'}.
+            </div>
+          </div>
+
+          <div style={{ padding: '10px 12px', background: 'rgba(251, 191, 36, 0.08)', borderRadius: '6px' }}>
+            <div className="heading-font" style={{ fontSize: '10px', color: '#fbbf24', letterSpacing: '0.1em', marginBottom: '4px', textTransform: 'uppercase' }}>
+              If top 4 advance
+            </div>
+            <div style={{ fontSize: '12.5px', color: '#cbd5e1' }}>
+              Semifinals: 1v4, 2v3. At <strong style={{ color: '#ef4444' }}>{seed}{ordinal(seed)}</strong>,{' '}
+              {seed <= 4
+                ? <>OHC would face <strong style={{ color: '#ffffff' }}>{matchup4 ? matchup4.team : 'the matching seed'}</strong>.</>
+                : <>OHC would not advance under this format.</>
+              }
+            </div>
+          </div>
+
+          <p style={{ margin: '10px 0 0', fontSize: '11.5px', color: '#7891a8', fontStyle: 'italic' }}>
+            Check the Sunday Games section above for the actual matchups once the tournament posts them.
+          </p>
+        </div>
+      </div>
+
+      {adjacentTeams.length > 0 && (
+        <div className="ice-edge" style={{ borderRadius: '10px', padding: '16px' }}>
+          <div className="heading-font" style={{ fontSize: '10px', color: '#f87171', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: '10px' }}>
+            Teams to Watch
+          </div>
+          <div style={{ fontSize: '12.5px', color: '#cbd5e1', marginBottom: '10px' }}>
+            These teams are closest to OHC in the standings. Results from their games today can change OHC's seeding.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {adjacentTeams.map(t => {
+              const pos = standings.findIndex(s => s.team === t.team) + 1;
+              const diff = t.pts - ohcRow.pts;
+              return (
+                <div key={t.team} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', padding: '6px 0', borderBottom: '1px solid rgba(148, 184, 214, 0.06)' }}>
+                  <span>
+                    <span style={{ color: '#7891a8', marginRight: '6px' }}>{pos}.</span>
+                    <span style={{ color: '#cbd5e1' }}>{t.team}</span>
+                  </span>
+                  <span className="mono-font" style={{ color: '#94b8d6', fontSize: '11px' }}>
+                    {t.pts} pts {diff >= 0 ? '(+' + diff + ')' : '(' + diff + ')'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
