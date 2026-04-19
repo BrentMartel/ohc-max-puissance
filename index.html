@@ -83,6 +83,12 @@ function parseStandings(rows) {
     const row = rows[i] || [];
     const teamName = (row[0] || '').toString().trim();
     if (!teamName) break;
+    // Stop if we've hit the next division header (e.g. "2011 D3 Contact")
+    if (/^\d{4}\s*D\d/i.test(teamName)) break;
+    // Stop if the row has no numeric data at all (prevents section breaks from slipping in)
+    const anyNumeric = [row[1], row[2], row[3], row[4], row[5], row[6], row[7]]
+      .some(v => (v || '').toString().trim() !== '');
+    if (!anyNumeric) break;
     teams.push({
       team: teamName,
       w: parseNum(row[1]),
@@ -177,9 +183,52 @@ function isSundayLabel(day) {
   return d.includes('sunday') || d.includes('dimanche') || d.includes('19');
 }
 
-function teamMatches(name, target) {
-  if (!name || !target) return false;
-  return name.toString().trim().toLowerCase() === target.toString().trim().toLowerCase();
+const TEAM_NOISE = new Set([
+  'hockey', 'hky', 'hkey', 'team', 'teams', 'selects', 'select',
+  'the', 'spring', 'state', 'area', 'carleton', 'place',
+  'perth', 'morrisburg', 'vaudreuil', 'cornwall', 'nepean',
+  'east', 'ontario'
+]);
+
+function normalizeTeamName(s) {
+  return (s || '').toString().toLowerCase()
+    .replace(/[\(\)'".,\/\\\-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function teamTokens(s) {
+  const norm = normalizeTeamName(s);
+  const kept = norm.split(' ').filter(w => {
+    if (!w) return false;
+    if (TEAM_NOISE.has(w)) return false;
+    if (/^\d{4}s?$/.test(w)) return false;
+    return /^\d+$/.test(w) || w.length >= 3;
+  });
+  // Strip trailing 's' so "Festivals" matches "Festival", "67s" matches "67", "Elites" matches "Elite"
+  return kept.map(w => w.length > 1 && w.endsWith('s') ? w.slice(0, -1) : w);
+}
+
+function teamMatches(a, b) {
+  if (!a || !b) return false;
+  const sa = normalizeTeamName(a);
+  const sb = normalizeTeamName(b);
+  if (!sa || !sb) return false;
+  if (sa === sb) return true;
+  // Whole-word substring match handles "Nailers" vs "STM Nailers"
+  const saPad = ' ' + sa + ' ';
+  const sbPad = ' ' + sb + ' ';
+  if (saPad.indexOf(' ' + sb + ' ') !== -1) return true;
+  if (sbPad.indexOf(' ' + sa + ' ') !== -1) return true;
+  // Token-based: require ALL significant tokens of the shorter name to match
+  const toksA = teamTokens(a);
+  const toksB = teamTokens(b);
+  if (toksA.length === 0 || toksB.length === 0) return false;
+  const setB = new Set(toksB);
+  let shared = 0;
+  for (const t of toksA) if (setB.has(t)) shared++;
+  const smaller = Math.min(toksA.length, toksB.length);
+  return shared === smaller;
 }
 
 function gameResultForTeam(game, team) {
@@ -600,7 +649,7 @@ function StandingsSection({ standings, selectedTeam, onSelectTeam }) {
             <tr>
               <th style={{ width: '28px' }}>#</th>
               <th>Team</th>
-              <th>GP</th>
+              <th>Record</th>
               <th>Pts</th>
               <th>Diff</th>
             </tr>
@@ -618,7 +667,7 @@ function StandingsSection({ standings, selectedTeam, onSelectTeam }) {
                     {t.team}
                     {isSelected && <span style={{ marginLeft: '6px', fontSize: '9px', color: isOHCTeam ? '#fecaca' : '#7dd3fc', letterSpacing: '0.1em' }}>● VIEWING</span>}
                   </td>
-                  <td className="mono-font" style={{ color: '#94b8d6', fontSize: '12px' }}>{t.gp}</td>
+                  <td className="mono-font" style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: 600 }}>{(t.w + t.sow) + '-' + (t.l + t.sol)}</td>
                   <td className="display-font" style={{ fontSize: '17px', color: isOHCTeam ? '#ef4444' : isSelected ? '#38bdf8' : '#ffffff' }}>{t.pts}</td>
                   <td className="mono-font" style={{ fontSize: '12px', fontWeight: 700, color: t.gd > 0 ? '#34d399' : t.gd < 0 ? '#f87171' : '#94b8d6' }}>
                     {t.gd > 0 ? '+' : ''}{t.gd}
