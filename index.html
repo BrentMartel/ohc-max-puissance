@@ -51,7 +51,7 @@ const LEVEL_TAG = '2012 D3';
 const OHC_ALIASES = ['ohc', 'max puissance'];
 const REFRESH_MS = 5 * 60 * 1000;
 
-const sheetUrl = (id) => `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv`;
+const sheetUrl = (id) => `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
 
 async function fetchCsv(id) {
   const res = await fetch(sheetUrl(id) + '&_=' + Date.now(), { cache: 'no-store' });
@@ -142,6 +142,7 @@ function parseSchedule(rows) {
       home,
       homeScore: (row[7] || '').toString().trim(),
       arena: (row[8] || '').toString().trim(),
+      bracket: (row[9] || '').toString().trim(),
     });
   }
 
@@ -605,6 +606,18 @@ function GameCard({ game, index, team, viewingOHC }) {
           <div style={{ fontSize: '11.5px', color: '#94b8d6', marginTop: '2px' }}>
             {game.time}{game.arena ? ' · ' + game.arena : ''} · {teamIsHome ? 'Home' : 'Away'}
           </div>
+          {game.bracket && (
+            <div className="heading-font" style={{
+              display: 'inline-block', marginTop: '6px',
+              fontSize: '9.5px', color: '#fbbf24',
+              letterSpacing: '0.1em', textTransform: 'uppercase',
+              padding: '2px 8px', borderRadius: '4px',
+              background: 'rgba(251, 191, 36, 0.12)',
+              border: '1px solid rgba(251, 191, 36, 0.3)',
+            }}>
+              {game.bracket}
+            </div>
+          )}
         </div>
         <span className={`${badgeClass} heading-font`} style={{
           padding: '4px 10px', borderRadius: '4px', fontSize: '11px',
@@ -786,43 +799,56 @@ function ScenariosSection({ ohcRow, ohcPosition, standings, allGames }) {
         </div>
       )}
 
-      <div className="ice-edge" style={{ borderRadius: '10px', padding: '16px', marginBottom: '12px' }}>
-        <div className="heading-font" style={{ fontSize: '10px', color: '#34d399', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: '10px' }}>
-          Likely Playoff Matchup
-        </div>
-        <div style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: '1.65' }}>
-          <p style={{ margin: '0 0 10px' }}>
-            Weekend tournaments of this size typically run a single-elimination bracket seeded by round-robin finish. Two common formats:
-          </p>
-
-          <div style={{ padding: '10px 12px', background: 'rgba(59, 130, 246, 0.08)', borderRadius: '6px', marginBottom: '8px' }}>
-            <div className="heading-font" style={{ fontSize: '10px', color: '#93c5fd', letterSpacing: '0.1em', marginBottom: '4px', textTransform: 'uppercase' }}>
-              If top 8 advance
+      {/* Actual bracket matchups pulled from the schedule */}
+      {(() => {
+        const ohcBracketGames = allGames.filter(g => g.bracket && (isOHC(g.away) || isOHC(g.home)));
+        const otherBracketGames = allGames.filter(g => g.bracket && !isOHC(g.away) && !isOHC(g.home));
+        if (ohcBracketGames.length === 0 && otherBracketGames.length === 0) return null;
+        return (
+          <div className="ice-edge" style={{ borderRadius: '10px', padding: '16px', marginBottom: '12px' }}>
+            <div className="heading-font" style={{ fontSize: '10px', color: '#34d399', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: '10px' }}>
+              Playoff Bracket
             </div>
-            <div style={{ fontSize: '12.5px', color: '#cbd5e1' }}>
-              Quarterfinals: 1v8, 2v7, 3v6, 4v5. At <strong style={{ color: '#ef4444' }}>{seed}{ordinal(seed)}</strong>, OHC would face{' '}
-              {matchup8 ? <strong style={{ color: '#ffffff' }}>{matchup8.team}</strong> : 'a top-8 opponent'}.
-            </div>
+            {ohcBracketGames.length > 0 && (
+              <div style={{ marginBottom: otherBracketGames.length > 0 ? '12px' : 0 }}>
+                <div className="heading-font" style={{ fontSize: '10px', color: '#ef4444', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '6px' }}>
+                  OHC's path
+                </div>
+                {ohcBracketGames.map((g, i) => {
+                  const opp = isOHC(g.home) ? g.away : g.home;
+                  const complete = !!(g.awayScore && g.homeScore);
+                  return (
+                    <div key={i} style={{ fontSize: '13px', color: '#cbd5e1', lineHeight: '1.55', marginBottom: '6px' }}>
+                      <strong style={{ color: '#fbbf24' }}>{g.bracket}</strong>
+                      {' at '}<strong style={{ color: '#ffffff' }}>{g.time}</strong>
+                      {' vs '}<strong style={{ color: '#ef4444' }}>{opp}</strong>
+                      {g.arena ? (' at ' + g.arena) : ''}
+                      {complete ? (' (final: ' + g.awayScore + '-' + g.homeScore + ')') : ''}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {otherBracketGames.length > 0 && (
+              <div>
+                <div className="heading-font" style={{ fontSize: '10px', color: '#93c5fd', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '6px' }}>
+                  Other bracket games
+                </div>
+                {otherBracketGames.map((g, i) => {
+                  const complete = !!(g.awayScore && g.homeScore);
+                  return (
+                    <div key={i} style={{ fontSize: '12.5px', color: '#94b8d6', lineHeight: '1.5', marginBottom: '4px' }}>
+                      <span style={{ color: '#fbbf24' }}>{g.bracket}</span>
+                      {' at ' + g.time + ': ' + g.away + ' vs ' + g.home}
+                      {complete ? (' (' + g.awayScore + '-' + g.homeScore + ')') : ''}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-
-          <div style={{ padding: '10px 12px', background: 'rgba(251, 191, 36, 0.08)', borderRadius: '6px' }}>
-            <div className="heading-font" style={{ fontSize: '10px', color: '#fbbf24', letterSpacing: '0.1em', marginBottom: '4px', textTransform: 'uppercase' }}>
-              If top 4 advance
-            </div>
-            <div style={{ fontSize: '12.5px', color: '#cbd5e1' }}>
-              Semifinals: 1v4, 2v3. At <strong style={{ color: '#ef4444' }}>{seed}{ordinal(seed)}</strong>,{' '}
-              {seed <= 4
-                ? <>OHC would face <strong style={{ color: '#ffffff' }}>{matchup4 ? matchup4.team : 'the matching seed'}</strong>.</>
-                : <>OHC would not advance under this format.</>
-              }
-            </div>
-          </div>
-
-          <p style={{ margin: '10px 0 0', fontSize: '11.5px', color: '#7891a8', fontStyle: 'italic' }}>
-            Check the Sunday Games section above for the actual matchups once the tournament posts them.
-          </p>
-        </div>
-      </div>
+        );
+      })()}
 
       {adjacentTeams.length > 0 && (
         <div className="ice-edge" style={{ borderRadius: '10px', padding: '16px' }}>
